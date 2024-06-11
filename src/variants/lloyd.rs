@@ -1,31 +1,49 @@
 use crate::{KMeans, KMeansState, KMeansConfig, memory::*};
-use packed_simd::{Simd, SimdArray};
+use std::simd::{Simd, SimdElement, LaneCount, SupportedLaneCount, num::SimdFloat};
+use std::ops::{Add, Div, Mul, Sub};
+use std::iter::Sum;
 
-pub(crate) struct Lloyd<T> where T: Primitive, [T;LANES]: SimdArray, Simd<[T;LANES]>: SimdWrapper<T>{
-	_p: std::marker::PhantomData<T>
+pub(crate) struct Lloyd<T, const LANES: usize> 
+where 
+    T: Primitive, 
+    LaneCount<LANES>: SupportedLaneCount,
+{
+    _p: std::marker::PhantomData<T>,
 }
-impl<T> Lloyd<T> where T: Primitive, [T;LANES]: SimdArray, Simd<[T;LANES]>: SimdWrapper<T> {
-    fn update_centroids(data: &KMeans<T>, state: &mut KMeansState<T>) -> T {
+
+impl<T, const LANES: usize> Lloyd<T, LANES> 
+where 
+T: SimdElement + Copy + Default + Add<Output = T> + Mul<Output = T> + Div<Output = T> + Sub<Output = T> + Sum + Primitive,
+Simd<T, LANES>: Sub<Output = Simd<T, LANES>> 
+    + Add<Output = Simd<T, LANES>> 
+    + Mul<Output = Simd<T, LANES>> 
+    + Div<Output = Simd<T, LANES>> 
+    + Sum 
+    + SimdFloat<Scalar = T>,
+LaneCount<LANES>: SupportedLaneCount,
+{
+    fn update_centroids(data: &KMeans<T, LANES>, state: &mut KMeansState<T>) -> T 
+    {
         let chunks_per_sample = data.p_sample_dims / LANES;
-        // Sum all samples in a cluster together into new_centroids
-        // Count non-empty clusters
         let mut used_centroids_cnt = 0;
-        let mut new_centroids = AlignedFloatVec::new(state.centroids.len());
+        let mut new_centroids = AlignedFloatVec::<LANES>::new(state.centroids.len());
         let mut new_distsum = T::zero();
 
         let (centroid_frequency, assignments, centroid_distances) = (&mut state.centroid_frequency, &state.assignments, &state.centroid_distances);
         rayon::scope(|s| {
             s.spawn(|_| {
-				used_centroids_cnt = data.update_cluster_frequencies(assignments, centroid_frequency);
+                used_centroids_cnt = data.update_cluster_frequencies(assignments, centroid_frequency);
             });
             s.spawn(|_| {
                 data.p_samples.chunks_exact(data.p_sample_dims)
                     .zip(assignments.iter().cloned())
                     .for_each(|(s, centroid_id)| {
                         new_centroids.chunks_exact_mut(LANES).skip(centroid_id * chunks_per_sample).take(chunks_per_sample)
-                            .zip(s.chunks_exact(LANES).map(|i| unsafe { Simd::<[T;LANES]>::from_slice_aligned_unchecked(i) }))
-                            .for_each(|(c,s)| unsafe { // For each chunk
-                                (Simd::<[T;LANES]>::from_slice_aligned_unchecked(c) + s).write_to_slice_aligned_unchecked(c);
+                            .zip(s.chunks_exact(LANES).map(|i| Simd::from_slice(i)))
+                            .for_each(|(c, s)| {
+                                let c_simd = Simd::from_slice(c);
+                                let result = c_simd + s;
+                                c.copy_from_slice(&*result.as_array());
                             });
                     });
             });
@@ -34,17 +52,12 @@ impl<T> Lloyd<T> where T: Primitive, [T;LANES]: SimdArray, Simd<[T;LANES]>: Simd
             });
         });
 
-        // Use used_centroids_cnt variable to check, whether there are empty clusters
-        // When there are, assign bad samples to empty clusters
         if used_centroids_cnt != state.k {
             let mut distance_sorted_samples: Vec<usize> = (0..data.sample_cnt).collect();
-            distance_sorted_samples.sort_unstable_by(
-                |&i1, &i2| state.centroid_distances[i1].partial_cmp(&state.centroid_distances[i2]).unwrap());
+            distance_sorted_samples.sort_unstable_by(|&i1, &i2| state.centroid_distances[i1].partial_cmp(&state.centroid_distances[i2]).unwrap());
 
-            // Assign empty clusters
             for i in 0..state.k {
                 if state.centroid_frequency[i] == 0 {
-                    // Find the sample with the highest distance to its centroid, that is not alone in its cluster
                     let mut sample_id = std::usize::MAX;
                     let mut prev_centroid_id = std::usize::MAX;
                     for j in (0..data.sample_cnt).rev() {
@@ -55,48 +68,51 @@ impl<T> Lloyd<T> where T: Primitive, [T;LANES]: SimdArray, Simd<[T;LANES]>: Simd
                         }
                     }
                     assert!(sample_id != std::usize::MAX && prev_centroid_id != std::usize::MAX);
-                    // Re-Assign found sample to centroid without any samples
+
                     state.centroid_frequency[prev_centroid_id] -= 1;
                     state.centroid_frequency[i] += 1;
                     new_distsum -= state.centroid_distances[sample_id];
-                    // Centroid is moved into the chosen point -> the points centroid distance is 0
                     state.centroid_distances[sample_id] = T::zero();
-                    // new_centroids is a sum of all points within a centroid here.
-                    // Subtract chosen sample from its previous centroid
+
                     new_centroids.iter_mut().skip(prev_centroid_id * data.p_sample_dims).take(data.p_sample_dims)
                         .zip(data.p_samples.iter().skip(sample_id * data.p_sample_dims).cloned())
-                        .for_each(|(cv,sv)| { *cv -= sv; });
-                    // Chosen sample is single point in cluster -> set cluster's sum to chosen point
+                        .for_each(|(cv, sv)| { *cv -= sv; });
+
                     new_centroids.iter_mut().skip(i * data.p_sample_dims).take(data.p_sample_dims)
                         .zip(data.p_samples.iter().skip(sample_id * data.p_sample_dims).cloned())
-                        .for_each(|(cv,sv)| { *cv = sv; });
+                        .for_each(|(cv, sv)| { *cv = sv; });
+
                     state.assignments[sample_id] = i;
                 }
             }
         }
-        // Calculate new centroids from updated cluster_assignments
+
         state.centroids.chunks_exact_mut(data.p_sample_dims)
             .zip(new_centroids.chunks_exact(data.p_sample_dims))
             .zip(state.centroid_frequency.iter().cloned())
-            .for_each(|((c,nc),cfreq)| {
-                let cfreq = Simd::<[T;LANES]>::splat(T::from(cfreq).unwrap());
+            .for_each(|((c, nc), cfreq)| {
+                let cfreq_simd = Simd::<T, LANES>::splat(T::from(cfreq).unwrap());
                 c.chunks_exact_mut(LANES)
-                    .zip(nc.chunks_exact(LANES).map(|v| unsafe { Simd::<[T;LANES]>::from_slice_aligned_unchecked(v) }))
-                    .for_each(|(c,nc)| unsafe {
-                        (nc / cfreq).write_to_slice_aligned_unchecked(c);
+                    .zip(nc.chunks_exact(LANES).map(|v| Simd::<T, LANES>::from_slice(v)))
+                    .for_each(|(c, nc)| {
+                        let nc_div_cfreq = nc / cfreq_simd;
+                        c.copy_from_slice(&*nc_div_cfreq.as_array());
                     });
             });
+
         new_distsum
     }
 
-    #[inline(always)] pub fn calculate<'a, F>(data: &KMeans<T>, k: usize, max_iter: usize, init: F, config: &KMeansConfig<'a, T>) -> KMeansState<T>
-                where for<'c> F: FnOnce(&KMeans<T>, &mut KMeansState<T>, &KMeansConfig<'c, T>) {
+    #[inline(always)]
+    pub fn calculate<'a, F>(data: &KMeans<T, LANES>, k: usize, max_iter: usize, init: F, config: &KMeansConfig<'a, T>) -> KMeansState<T>
+    where 
+        for<'c> F: FnOnce(&KMeans<T, LANES>, &mut KMeansState<T>, &KMeansConfig<'c, T>)
+    {
         assert!(k <= data.sample_cnt);
 
         let mut state = KMeansState::new(data.sample_cnt, data.p_sample_dims, k);
         state.distsum = T::infinity();
 
-        // Initialize clusters and notify subscriber
         init(&data, &mut state, config);
         (config.init_done)(&state);
         let mut abort_strategy = config.abort_strategy.create_logic();
@@ -105,8 +121,7 @@ impl<T> Lloyd<T> where T: Primitive, [T;LANES]: SimdArray, Simd<[T;LANES]>: Simd
             data.update_cluster_assignments(&mut state, None);
             let new_distsum = Self::update_centroids(data, &mut state);
 
-			// Notify subscriber about finished iteration
-			(config.iteration_done)(&state, i, new_distsum);
+            (config.iteration_done)(&state, i, new_distsum);
             if !abort_strategy.next(new_distsum) {
                 break;
             }
@@ -131,7 +146,7 @@ mod tests {
     fn iris_dataset_f64() where {
         let samples = vec![1.4f64, 0.2, 1.4, 0.2, 1.3, 0.2, 1.5, 0.2, 1.4, 0.2, 1.7, 0.4, 1.4, 0.3, 1.5, 0.2, 1.4, 0.2, 1.5, 0.1, 1.5, 0.2, 1.6, 0.2, 1.4, 0.1, 1.1, 0.1, 1.2, 0.2, 1.5, 0.4, 1.3, 0.4, 1.4, 0.3, 1.7, 0.3, 1.5, 0.3, 1.7, 0.2, 1.5, 0.4, 1.0, 0.2, 1.7, 0.5, 1.9, 0.2, 1.6, 0.2, 1.6, 0.4, 1.5, 0.2, 1.4, 0.2, 1.6, 0.2, 1.6, 0.2, 1.5, 0.4, 1.5, 0.1, 1.4, 0.2, 1.5, 0.2, 1.2, 0.2, 1.3, 0.2, 1.4, 0.1, 1.3, 0.2, 1.5, 0.2, 1.3, 0.3, 1.3, 0.3, 1.3, 0.2, 1.6, 0.6, 1.9, 0.4, 1.4, 0.3, 1.6, 0.2, 1.4, 0.2, 1.5, 0.2, 1.4, 0.2, 4.7, 1.4, 4.5, 1.5, 4.9, 1.5, 4.0, 1.3, 4.6, 1.5, 4.5, 1.3, 4.7, 1.6, 3.3, 1.0, 4.6, 1.3, 3.9, 1.4, 3.5, 1.0, 4.2, 1.5, 4.0, 1.0, 4.7, 1.4, 3.6, 1.3, 4.4, 1.4, 4.5, 1.5, 4.1, 1.0, 4.5, 1.5, 3.9, 1.1, 4.8, 1.8, 4.0, 1.3, 4.9, 1.5, 4.7, 1.2, 4.3, 1.3, 4.4, 1.4, 4.8, 1.4, 5.0, 1.7, 4.5, 1.5, 3.5, 1.0, 3.8, 1.1, 3.7, 1.0, 3.9, 1.2, 5.1, 1.6, 4.5, 1.5, 4.5, 1.6, 4.7, 1.5, 4.4, 1.3, 4.1, 1.3, 4.0, 1.3, 4.4, 1.2, 4.6, 1.4, 4.0, 1.2, 3.3, 1.0, 4.2, 1.3, 4.2, 1.2, 4.2, 1.3, 4.3, 1.3, 3.0, 1.1, 4.1, 1.3, 6.0, 2.5, 5.1, 1.9, 5.9, 2.1, 5.6, 1.8, 5.8, 2.2, 6.6, 2.1, 4.5, 1.7, 6.3, 1.8, 5.8, 1.8, 6.1, 2.5, 5.1, 2.0, 5.3, 1.9, 5.5, 2.1, 5.0, 2.0, 5.1, 2.4, 5.3, 2.3, 5.5, 1.8, 6.7, 2.2, 6.9, 2.3, 5.0, 1.5, 5.7, 2.3, 4.9, 2.0, 6.7, 2.0, 4.9, 1.8, 5.7, 2.1, 6.0, 1.8, 4.8, 1.8, 4.9, 1.8, 5.6, 2.1, 5.8, 1.6, 6.1, 1.9, 6.4, 2.0, 5.6, 2.2, 5.1, 1.5, 5.6, 1.4, 6.1, 2.3, 5.6, 2.4, 5.5, 1.8, 4.8, 1.8, 5.4, 2.1, 5.6, 2.4, 5.1, 2.3, 5.1, 1.9, 5.9, 2.3, 5.7, 2.5, 5.2, 2.3, 5.0, 1.9, 5.2, 2.0, 5.4, 2.3, 5.1, 1.8];
 
-        let kmean = KMeans::new(samples, 150, 2);
+        let kmean: KMeans<f64, LANES> = KMeans::new(samples, 150, 2);
         let rnd = rand::rngs::StdRng::seed_from_u64(1);
 		let conf = KMeansConfig::build().random_generator(rnd).build();
         let res = kmean.kmeans_lloyd(3, 100, KMeans::init_kmeanplusplus, &conf);
@@ -143,7 +158,7 @@ mod tests {
 		let should_centroid_frequency = vec![52, 50, 48];
 
         assert_eq!(res.distsum, 31.371358974358966);
-        assert_eq!(res.sample_dims, LANES);
+        assert_eq!(res.sample_dims, 8);
         assert_eq!(res.assignments, should_assignments);
         assert_eq!(res.centroid_distances, should_centroid_distances);
         assert_eq!(res.centroids, should_centroids);
@@ -154,7 +169,7 @@ mod tests {
     fn iris_dataset_f32() where {
         let samples = vec![1.4f32, 0.2, 1.4, 0.2, 1.3, 0.2, 1.5, 0.2, 1.4, 0.2, 1.7, 0.4, 1.4, 0.3, 1.5, 0.2, 1.4, 0.2, 1.5, 0.1, 1.5, 0.2, 1.6, 0.2, 1.4, 0.1, 1.1, 0.1, 1.2, 0.2, 1.5, 0.4, 1.3, 0.4, 1.4, 0.3, 1.7, 0.3, 1.5, 0.3, 1.7, 0.2, 1.5, 0.4, 1.0, 0.2, 1.7, 0.5, 1.9, 0.2, 1.6, 0.2, 1.6, 0.4, 1.5, 0.2, 1.4, 0.2, 1.6, 0.2, 1.6, 0.2, 1.5, 0.4, 1.5, 0.1, 1.4, 0.2, 1.5, 0.2, 1.2, 0.2, 1.3, 0.2, 1.4, 0.1, 1.3, 0.2, 1.5, 0.2, 1.3, 0.3, 1.3, 0.3, 1.3, 0.2, 1.6, 0.6, 1.9, 0.4, 1.4, 0.3, 1.6, 0.2, 1.4, 0.2, 1.5, 0.2, 1.4, 0.2, 4.7, 1.4, 4.5, 1.5, 4.9, 1.5, 4.0, 1.3, 4.6, 1.5, 4.5, 1.3, 4.7, 1.6, 3.3, 1.0, 4.6, 1.3, 3.9, 1.4, 3.5, 1.0, 4.2, 1.5, 4.0, 1.0, 4.7, 1.4, 3.6, 1.3, 4.4, 1.4, 4.5, 1.5, 4.1, 1.0, 4.5, 1.5, 3.9, 1.1, 4.8, 1.8, 4.0, 1.3, 4.9, 1.5, 4.7, 1.2, 4.3, 1.3, 4.4, 1.4, 4.8, 1.4, 5.0, 1.7, 4.5, 1.5, 3.5, 1.0, 3.8, 1.1, 3.7, 1.0, 3.9, 1.2, 5.1, 1.6, 4.5, 1.5, 4.5, 1.6, 4.7, 1.5, 4.4, 1.3, 4.1, 1.3, 4.0, 1.3, 4.4, 1.2, 4.6, 1.4, 4.0, 1.2, 3.3, 1.0, 4.2, 1.3, 4.2, 1.2, 4.2, 1.3, 4.3, 1.3, 3.0, 1.1, 4.1, 1.3, 6.0, 2.5, 5.1, 1.9, 5.9, 2.1, 5.6, 1.8, 5.8, 2.2, 6.6, 2.1, 4.5, 1.7, 6.3, 1.8, 5.8, 1.8, 6.1, 2.5, 5.1, 2.0, 5.3, 1.9, 5.5, 2.1, 5.0, 2.0, 5.1, 2.4, 5.3, 2.3, 5.5, 1.8, 6.7, 2.2, 6.9, 2.3, 5.0, 1.5, 5.7, 2.3, 4.9, 2.0, 6.7, 2.0, 4.9, 1.8, 5.7, 2.1, 6.0, 1.8, 4.8, 1.8, 4.9, 1.8, 5.6, 2.1, 5.8, 1.6, 6.1, 1.9, 6.4, 2.0, 5.6, 2.2, 5.1, 1.5, 5.6, 1.4, 6.1, 2.3, 5.6, 2.4, 5.5, 1.8, 4.8, 1.8, 5.4, 2.1, 5.6, 2.4, 5.1, 2.3, 5.1, 1.9, 5.9, 2.3, 5.7, 2.5, 5.2, 2.3, 5.0, 1.9, 5.2, 2.0, 5.4, 2.3, 5.1, 1.8];
 
-        let kmean = KMeans::new(samples, 150, 2);
+        let kmean: KMeans<f32, LANES> = KMeans::new(samples, 150, 2);
         let rnd = rand::rngs::StdRng::seed_from_u64(1);
 		let conf = KMeansConfig::build().random_generator(rnd).build();
         let res = kmean.kmeans_lloyd(3, 100, KMeans::init_kmeanplusplus, &conf);
@@ -166,7 +181,7 @@ mod tests {
 		let should_centroid_frequency = vec![54, 50, 46];
 
         assert_eq!(res.distsum, 31.412888);
-        assert_eq!(res.sample_dims, LANES);
+        assert_eq!(res.sample_dims, 8);
         assert_eq!(res.assignments, should_assignments);
         assert_eq!(res.centroid_distances, should_centroid_distances);
         assert_eq!(res.centroids, should_centroids);
@@ -182,7 +197,7 @@ mod tests {
         let rnd = rand::rngs::StdRng::seed_from_u64(1);
         let conf = KMeansConfig::build().random_generator(rnd).build();
 
-        let res = kmean.kmeans_lloyd(2, 1, |kmean: &KMeans<f64>, state: &mut KMeansState<f64>, _| {
+        let res = kmean.kmeans_lloyd(2, 1, |kmean: &KMeans<f64, LANES>, state: &mut KMeansState<f64>, _| {
             // p_<array> arrays are padded to p_sample_dims!
             state.centroids[0] = initial_centroids[0];
             state.centroids[1] = initial_centroids[1];
