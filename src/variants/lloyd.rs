@@ -1,6 +1,6 @@
 use crate::{KMeans, KMeansState, KMeansConfig, memory::*};
 use std::simd::{Simd, SimdElement, LaneCount, SupportedLaneCount, num::SimdFloat};
-use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
+use std::ops::{Add, Div, Mul, Sub};
 use std::iter::Sum;
 
 pub(crate) struct Lloyd<T, const LANES: usize> 

@@ -1,5 +1,4 @@
 use kmeans::*;
-use rand::prelude::*;
 
 fn main() {
     let (sample_cnt, sample_dims, k, max_iter) = (20000, 200, 4, 2500);

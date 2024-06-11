@@ -117,12 +117,6 @@ mod tests {
     use std::simd::{num::SimdFloat, LaneCount, Simd, SimdElement, SupportedLaneCount};
     use test::Bencher;
 
-    fn add_simds_f64() {
-        let a = Simd::<f64, 8>::splat(1.0);
-        let b = a.reduce_sum();
-        assert_eq!(b, 8.0);
-    }
-
     #[bench]
     fn complete_benchmark_lloyd_small_f64(b: &mut Bencher) {
         complete_benchmark_lloyd::<f64, LANES>(b, 200, 2000, 10, 32);
