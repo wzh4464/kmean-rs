@@ -13,9 +13,9 @@ exclude = ["examples/*"]
 
 [dependencies]
 packed_simd = "0.3.9"
-rand = "0.7"
-num = "0.3"
-rayon = "1.5.1"
+rand = "0.8.5"
+num = "0.4.3"
+rayon = "1.10.0"
 
 [lib]
 name = "kmeans"
