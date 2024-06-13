@@ -1,8 +1,8 @@
-# kmeans
-[![Current Crates.io Version](https://img.shields.io/crates/v/kmeans.svg)](https://crates.io/crates/kmeans)
-[![docs](https://docs.rs/kmeans/badge.svg)](https://docs.rs/kmeans/latest/kmeans/)
+# kmeans-smid
+[![Current Crates.io Version](https://img.shields.io/crates/v/kmeans-smid.svg)](https://crates.io/crates/kmeans-smid)
+[![docs](https://docs.rs/kmeans-smid/badge.svg)](https://docs.rs/kmeans/latest/kmeans-smid/)
 
-kmeans is a small and fast library for k-means clustering calculations.
+kmeans-smid is a small and fast library for k-means clustering calculations. It fixes smid problem from kmeans crate.
 Here is a small example, using kmean++ as initialization method and lloyd as k-means variant:
 
 ```rust
@@ -16,7 +16,7 @@ fn main() {
     samples.iter_mut().for_each(|v| *v = rand::random());
 
     // Calculate kmeans, using kmean++ as initialization-method
-    let kmean = KMeans::new(samples, sample_cnt, sample_dims);
+    let kmean = KMeans<f64, 8>::new(samples, sample_cnt, sample_dims);
     let result = kmean.kmeans_lloyd(k, max_iter, KMeans::init_kmeanplusplus, &KMeansConfig::default());
 
     println!("Centroids: {:?}", result.centroids);
