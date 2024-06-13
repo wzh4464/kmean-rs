@@ -315,7 +315,7 @@ where
     }
 
     /// Normal K-Means algorithm implementation. This is the same algorithm as implemented in Matlab (one-phase).
-    /// (see: https://uk.mathworks.com/help/stats/kmeans.html#bueq7aj-5    Section: More About)
+    /// (see: <https://uk.mathworks.com/help/stats/kmeans.html#bueq7aj-5>    Section: More About)
     ///
     /// ## Arguments
     /// - **k**: Amount of clusters to search for
@@ -359,7 +359,7 @@ where
     }
 
     /// Mini-Batch k-Means implementation.
-    /// (see: https://dl.acm.org/citation.cfm?id=1772862)
+    /// (see: <https://dl.acm.org/citation.cfm?id=1772862>)
     ///
     /// ## Arguments
     /// - **batch_size**: Amount of samples to use per iteration (higher -> better approximation but slower)
@@ -429,7 +429,7 @@ where
     /// is from its centroid. Then, one sample is randomly selected, while taking their probability of being
     /// the next centroid into account. This leads to a tendency of selecting centroids, that are far away from
     /// their currently assigned cluster's centroid.
-    /// (see: https://uk.mathworks.com/help/stats/kmeans.html#bueq7aj-5    Section: More About)
+    /// (see: <https://uk.mathworks.com/help/stats/kmeans.html#bueq7aj-5>    Section: More About)
     ///
     /// ## Note
     /// This method is not meant for direct invocation. Pass a reference to it, to an instance-method of [`KMeans`].
