@@ -1,4 +1,4 @@
-# kmeans-smid
+# kmeans_smid
 [![Current Crates.io Version](https://img.shields.io/crates/v/kmeans-smid.svg)](https://crates.io/crates/kmeans-smid)
 [![docs](https://docs.rs/kmeans-smid/badge.svg)](https://docs.rs/kmeans-smid/latest/kmeans/)
 
@@ -6,7 +6,7 @@ kmeans_smid is a small and fast library for k-means clustering calculations. It 
 Here is a small example, using kmean++ as initialization method and lloyd as k-means variant:
 
 ```rust
-use kmeans_smid::*;
+use kmeans::*;
 
 fn main() {
     let (sample_cnt, sample_dims, k, max_iter) = (20000, 200, 4, 100);
