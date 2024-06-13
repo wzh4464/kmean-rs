@@ -1,10 +1,8 @@
-cargo-features = ["edition2024"]
-
 [package]
 name = "kmeans_smid"
 version = "0.2.2"
 authors = ["Zihan Wu rust@zihanng.shop>"]
-edition = "2024"
+edition = "2021"
 description = "Small and fast library for k-means clustering calculations. Fixing smid from `kmeans-rs`."
 repository = "https://github.com/wzh4464/kmean-rs"
 readme = "README.md"
