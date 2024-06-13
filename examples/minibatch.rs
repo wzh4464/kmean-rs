@@ -1,4 +1,4 @@
-use kmeans::*;
+use kmeans_smid::*;
 
 fn main() {
     let (sample_cnt, sample_dims, k, max_iter) = (20000, 200, 4, 100);

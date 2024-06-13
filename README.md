@@ -6,7 +6,7 @@ kmeans_smid is a small and fast library for k-means clustering calculations. It 
 Here is a small example, using kmean++ as initialization method and lloyd as k-means variant:
 
 ```rust
-use kmeans::*;
+use kmeans_smid::*;
 
 fn main() {
     let (sample_cnt, sample_dims, k, max_iter) = (20000, 200, 4, 100);

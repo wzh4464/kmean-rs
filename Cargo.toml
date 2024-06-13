@@ -1,10 +1,10 @@
 [package]
 name = "kmeans_smid"
-version = "0.2.3"
+version = "0.3.0"
 authors = ["Zihan Wu rust@zihanng.shop>"]
 edition = "2021"
 description = "Small and fast library for k-means clustering calculations. Fixing smid from `kmeans-rs`."
-repository = "https://github.com/wzh4464/kmean-rs"
+repository = "https://github.com/wzh4464/kmean-smid-rs"
 readme = "README.md"
 license = "Apache-2.0"
 keywords = ["kmeans", "k-means", "means", "cluster", "clustering"]
@@ -18,7 +18,7 @@ num-traits = "0.2.19"
 rayon = "1.10.0"
 
 [lib]
-name = "kmeans"
+name = "kmeans_smid"
 path = "src/lib.rs"
 
 [[example]]
